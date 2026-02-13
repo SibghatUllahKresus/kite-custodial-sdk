@@ -1,0 +1,36 @@
+{
+  "name": "@kite/custodial-sdk",
+  "version": "1.0.0",
+  "description": "KITE Custodial SDK – standalone client for KITE Custody Orchestrator (wallets, users, transactions: create, sign, broadcast). Part of KITE custody solution. No org management; organization is derived from API key.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test:sdk": "node scripts/test-sdk.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "kite",
+    "wallet",
+    "transaction",
+    "ethereum",
+    "evm",
+    "custodial",
+    "sdk"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.3"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
