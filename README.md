@@ -1,6 +1,8 @@
 # KITE Custodial SDK
 
-Standalone client for the **KITE Custody Orchestrator** API (KITE custody solution). Use it to create wallets, list users, and build/sign/broadcast transactions. Your organization is derived from your API key; there is no org management in the SDK.
+TypeScript/Node client for the KITE Custody Orchestrator API.
+
+This SDK covers wallet, user, gas/nonce, and transaction lifecycle operations (create unsigned tx, sign, broadcast). Organization/admin management is intentionally not exposed in the SDK.
 
 ## Installation
 
@@ -8,239 +10,182 @@ Standalone client for the **KITE Custody Orchestrator** API (KITE custody soluti
 npm install @kite/custodial-sdk
 ```
 
-Or from the monorepo:
+## Requirements
 
-```bash
-cd packages/sdk && npm run build
-# Then from your app: require('./packages/sdk/dist') or link the package
-```
+- Node.js 18+ (uses global `fetch` and `AbortController`)
 
-## Configuration
+## Quick start
 
 ```ts
 import { KiteClient } from '@kite/custodial-sdk';
 
-const config = {
-  baseUrl: 'https://your-kite-url.com',  // KITE Custody Orchestrator URL
-  apiKey: 'your-api-key-here',            // API key from your organization
-  logLevel: 'info',                       // 'debug' | 'info' | 'warn' | 'error'
-  timeout: 30000,                         // Request timeout in ms
-};
-
-const client = new KiteClient(config);
+const client = new KiteClient({
+  baseUrl: 'https://your-orchestrator-url.com',
+  apiKey: 'your-organization-api-key',
+  logLevel: 'info', // optional: debug | info | warn | error
+  timeout: 30000,   // optional, ms
+});
 ```
 
-## Usage
+## API reference
+
+| Area | Method | Backend endpoint | Required inputs |
+| --- | --- | --- | --- |
+| Health | `healthCheck()` | `GET /health` | None |
+| Wallets | `createWallet({ userEmail })` | `POST /api/wallets` | `userEmail` |
+| Wallets | `listWallets()` | `GET /api/wallets` | None |
+| Wallets | `getWallet(walletId)` | `GET /api/wallets/:walletId` | `walletId` |
+| Wallets | `getWalletsByUser(email)` | `GET /api/wallets/users/:email/wallets` | `email` |
+| Users | `listUsers()` | `GET /api/users` | None |
+| Users | `getUser(email)` | `GET /api/users/:email` | `email` |
+| Tx utility | `getNonce({ walletId, rpcUrl })` | `POST /api/transactions/nonce` | `walletId`, `rpcUrl` |
+| Tx utility | `getGasPrices({ rpcUrl, transactionType?, transaction? })` | `POST /api/transactions/gas-prices` | `rpcUrl` |
+| Tx utility | `getGasPrice({ rpcUrl, transactionType?, transaction? })` | `POST /api/transactions/gas-price` | `rpcUrl` |
+| Tx create | `createNativeTransfer(params)` | `POST /api/transactions/native` | `walletId`, `rpcUrl`, `to` |
+| Tx create | `createERC20Transfer(params)` | `POST /api/transactions/erc20` | `walletId`, `rpcUrl`, `tokenAddress`, `to`, `amount` |
+| Tx sign | `signTransaction({ walletId, unsignedRaw, transaction? })` | `POST /api/transactions/sign` | `walletId`, `unsignedRaw` (`0x...`) |
+| Tx broadcast | `broadcastTransaction({ signedHex, rpcUrl })` | `POST /api/transactions/broadcast` | `signedHex`, `rpcUrl` |
+
+## Usage examples
 
 ### Health
 
 ```ts
 const health = await client.healthCheck();
-// { status: 'ok', service: 'kite-custody-orchestrator', environment?: string }
+// { status, service, environment? }
 ```
 
-### Wallets
+### Wallets and users
 
 ```ts
-// Create wallet (user is created if needed)
 const created = await client.createWallet({ userEmail: 'user@example.com' });
 // { userId, userEmail, walletId, address }
 
-// List wallets
 const { wallets, count } = await client.listWallets();
+const wallet = await client.getWallet(created.walletId);
+const userWallets = await client.getWalletsByUser('user@example.com');
 
-// Get one wallet
-const wallet = await client.getWallet(walletId);
-
-// Get wallets by user email
-const { user, wallets, count } = await client.getWalletsByUser('user@example.com');
-```
-
-### Users
-
-```ts
-const { users, count } = await client.listUsers();
+const { users } = await client.listUsers();
 const user = await client.getUser('user@example.com');
 ```
 
-### Transactions – Nonce & Gas
+### Nonce and gas
 
 ```ts
-const nonceResult = await client.getNonce({ walletId, rpcUrl: 'https://eth.llamarpc.com' });
-// { walletId, walletAddress, nonce, rpcUrl }
+const nonce = await client.getNonce({
+  walletId: 'wallet-id',
+  rpcUrl: 'https://eth.llamarpc.com',
+});
 
-const gasTiers = await client.getGasPrices({ rpcUrl, transactionType: 2 });
-// { rpcUrl, low, average, high, chainSupport?, message? }
-// Gas estimates include a 30% safety buffer automatically
+const gasTiers = await client.getGasPrices({
+  rpcUrl: 'https://eth.llamarpc.com',
+  transactionType: 2, // optional
+});
 
-const singleGas = await client.getGasPrice({ rpcUrl, transactionType: 2 });
-// Gas estimates include a 30% safety buffer automatically
+const singleGas = await client.getGasPrice({
+  rpcUrl: 'https://eth.llamarpc.com',
+  transactionType: 2, // optional
+});
 ```
 
-### Transactions – Create, Sign, Broadcast
+### Native transfer flow (create -> sign -> broadcast)
 
 ```ts
-// 1. Create unsigned native transfer (EIP-1559)
-// Gas calculation includes a 30% safety buffer automatically
-// Optional: pass tokenAddress to treat as ERC20 for gas estimation
-const created = await client.createNativeTransfer({
-  walletId,
+const createdTx = await client.createNativeTransfer({
+  walletId: 'wallet-id',
   rpcUrl: 'https://eth.llamarpc.com',
-  to: '0x...',
-  value: '1000000000000000000',
-  transactionType: 2,
-  tokenAddress: undefined, // Optional: if provided, gas calculation treats as ERC20
-  gasData: { maxFeePerGas: '...', maxPriorityFeePerGas: '...', gasLimit: '21000' },
-  nonce: 0,
+  to: '0x0000000000000000000000000000000000000001',
+  value: '0',
+  // optional:
+  // transactionType: 1 | 2
+  // gasData: { gasPrice?, maxFeePerGas?, maxPriorityFeePerGas?, gasLimit? }
+  // nonce: number
+  // tokenAddress: if provided, backend can use ERC20-style gas estimation
 });
-// created.unsignedRaw → use in signTransaction
-// created.chainWarning? → warning if transaction type doesn't match chain support
 
-// 2. Sign
-const signed = await client.signTransaction({
-  walletId,
-  unsignedRaw: created.unsignedRaw,
+const signedTx = await client.signTransaction({
+  walletId: 'wallet-id',
+  unsignedRaw: createdTx.unsignedRaw,
 });
-// signed.signedHex → use in broadcastTransaction
 
-// 3. Broadcast
 const receipt = await client.broadcastTransaction({
-  signedHex: signed.signedHex,
+  signedHex: signedTx.signedHex,
   rpcUrl: 'https://eth.llamarpc.com',
 });
-// On success: receipt.transactionHash, blockNumber, status, gasUsed, etc.
-// On error: receipt.errorCode, receipt.errorData, receipt.reason (detailed error info)
 ```
 
-### ERC20 transfer
+### ERC20 transfer flow
 
 ```ts
-// Gas calculation includes a 30% safety buffer automatically for contract interactions
-const created = await client.createERC20Transfer({
-  walletId,
-  rpcUrl,
+const createdTx = await client.createERC20Transfer({
+  walletId: 'wallet-id',
+  rpcUrl: 'https://eth.llamarpc.com',
   tokenAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  to: '0x...',
+  to: '0x0000000000000000000000000000000000000001',
   amount: '1000000',
-  transactionType: 2,
-  gasData: { ... },
-  nonce: 0,
+  // optional: transactionType, gasData, nonce
 });
-// Then signTransaction(created.unsignedRaw) and broadcastTransaction(signed.signedHex)
-// created.chainWarning? → warning if transaction type doesn't match chain support
+
+const signedTx = await client.signTransaction({
+  walletId: 'wallet-id',
+  unsignedRaw: createdTx.unsignedRaw,
+});
+
+await client.broadcastTransaction({
+  signedHex: signedTx.signedHex,
+  rpcUrl: 'https://eth.llamarpc.com',
+});
 ```
 
-### Native transfer with token address (for ERC20 gas calculation)
+## Errors
+
+The SDK throws typed errors:
+
+- `KiteApiError`: API responded with non-2xx or `success: false`
+- `KiteNetworkError`: request failed before API response (timeout/network)
 
 ```ts
-// You can also use createNativeTransfer with tokenAddress for ERC20 gas estimation
-const created = await client.createNativeTransfer({
-  walletId,
-  rpcUrl,
-  to: '0x...',
-  value: '1000000',
-  tokenAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // Optional: for ERC20 gas calculation
-  transactionType: 2,
-  gasData: { ... },
-  nonce: 0,
-});
-// The system will detect tokenAddress and calculate gas accordingly (ERC20 vs native)
-```
-
-## Error handling
-
-All API and network errors are thrown as typed errors so you can handle them cleanly.
-
-- **`KiteApiError`** – API returned an error (4xx/5xx or `success: false`).
-  - `statusCode` – HTTP status
-  - `message` – error message from the API
-  - `isClientError()`, `isServerError()`, `isAuthError()`, `isNotFound()` helpers
-- **`KiteNetworkError`** – Request failed before reaching the API (timeout, network, etc.).
-  - `cause` – original error if available
-
-Example:
-
-```ts
-import { KiteClient, KiteApiError, KiteNetworkError } from '@kite/custodial-sdk';
+import { KiteApiError, KiteNetworkError } from '@kite/custodial-sdk';
 
 try {
-  const wallet = await client.getWallet(walletId);
-  console.log(wallet.address);
+  await client.getWallet('wallet-id');
 } catch (err) {
   if (err instanceof KiteApiError) {
-    if (err.isNotFound()) console.error('Wallet not found');
-    else if (err.isAuthError()) console.error('Invalid or missing API key');
-    else console.error('API error:', err.statusCode, err.message);
+    console.error(err.statusCode, err.message);
+    if (err.isAuthError()) console.error('Invalid or missing API key');
   } else if (err instanceof KiteNetworkError) {
-    console.error('Network error:', err.message);
-  } else {
-    throw err;
+    console.error('Network issue:', err.message);
   }
 }
 ```
 
-### Broadcast Error Details
+### Broadcast failure details
 
-When broadcasting fails, the response includes detailed error information:
+`broadcastTransaction` resolves only on success. On failure, it throws `KiteApiError`; detailed RPC fields are available on `error.raw`.
 
 ```ts
 try {
-  const result = await client.broadcastTransaction({ signedHex, rpcUrl });
-  // Success: result.transactionHash, result.blockNumber, status, gasUsed, etc.
-} catch (error) {
-  if (error instanceof KiteApiError) {
-    // Check error.raw for detailed error information
-    const errorDetails = error.raw;
-    if (errorDetails?.errorCode) {
-      console.error('Error code:', errorDetails.errorCode);
-    }
-    if (errorDetails?.errorData) {
-      console.error('Error data:', errorDetails.errorData);
-    }
-    if (errorDetails?.reason) {
-      console.error('Reason:', errorDetails.reason);
-    }
+  await client.broadcastTransaction({ signedHex, rpcUrl });
+} catch (err) {
+  if (err instanceof KiteApiError) {
+    console.error('Broadcast failed:', err.statusCode, err.message);
+    console.error('Raw details:', err.raw); // may include errorCode, errorData, reason
   }
 }
 ```
 
-The broadcast endpoint returns detailed error information including:
-- `errorCode` – RPC error code
-- `errorData` – Additional error data from RPC
-- `reason` – Error reason
-- Specific messages for: out of gas, transaction reverts, invalid signatures, nonce errors, insufficient funds
+## Test script
 
-## Requirements
-
-- **Node.js 18+** (uses global `fetch` and `AbortController`).
-- For older Node, provide a `fetch` polyfill or use a different environment (e.g. browser).
-
-## API coverage
-
-| Area        | Methods |
-|------------|---------|
-| Health     | `healthCheck()` |
-| Wallets    | `createWallet`, `listWallets`, `getWallet`, `getWalletsByUser` |
-| Users      | `listUsers`, `getUser` |
-| Nonce/Gas  | `getNonce`, `getGasPrices`, `getGasPrice` |
-| Transactions | `createNativeTransfer`, `createERC20Transfer`, `signTransaction`, `broadcastTransaction` |
-
-No organization or admin endpoints are exposed; the backend derives organization from your API key. **KITE** is a wallet infrastructure provider; this SDK is for their custody solution (Orchestrator + Vault).
-
-## Testing script
-
-From the package directory, after `npm run build`:
+After building:
 
 ```bash
-# Required: create an organization first (admin API), then set the API key
-export KITE_BASE_URL=http://98.93.62.99:8000
+npm run build
+
+export KITE_BASE_URL=http://localhost:3000
 export KITE_API_KEY=your-organization-api-key
 
-# Run all SDK flows (create wallet, list, get nonce, gas, create tx, sign; optionally broadcast)
 npm run test:sdk
-
-# Skip broadcasting the signed tx (avoids sending a real transaction)
 SKIP_BROADCAST=1 npm run test:sdk
 ```
 
-Optional env: `LOG_LEVEL=debug`, `RPC_URL`, `TEST_USER_EMAIL`.
+Optional env vars: `LOG_LEVEL`, `RPC_URL`, `TEST_USER_EMAIL`.
